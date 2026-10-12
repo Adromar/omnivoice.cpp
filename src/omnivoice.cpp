@@ -179,6 +179,7 @@ void ov_init_default_params(struct ov_init_params * p) {
     p->codec_path  = nullptr;
     p->use_fa      = true;
     p->clamp_fp16  = false;
+    p->device      = nullptr;
 }
 
 void ov_tts_default_params(struct ov_tts_params * p) {
@@ -240,7 +241,9 @@ struct ov_context * ov_init(const struct ov_init_params * params) {
     // ov_free, which is idempotent on partial state (NULL-safe sched, NULL
     // GGUF handles, refcount-correct backend release).
     try {
-        ov->bp = backend_init("LM");
+        // The device field exists from ABI 4, an older struct takes the
+        // best available device.
+        ov->bp = backend_init("LM", params->abi_version >= 4 ? params->device : nullptr);
         if (!ov->bp.backend) {
             ov_throw("ov_init: backend_init failed (no GGML backend available)");
         }

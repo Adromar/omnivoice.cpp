@@ -54,7 +54,7 @@ extern "C" {
 // There is no separate semver triple. The runtime build identity is the
 // git short hash + commit date string returned by ov_version(); for
 // binding compat checks, OV_ABI_VERSION is the only number that matters.
-#define OV_ABI_VERSION 3
+#define OV_ABI_VERSION 4
 
 // Returns a static string of the form "<git-hash> (<date>)" identifying
 // the exact commit this binary was built from. Safe to call from any
@@ -104,18 +104,21 @@ struct ov_context;
 // codec_path is NULL the codec module is skipped and ov_synthesize fails
 // immediately with OV_STATUS_INVALID_PARAMS. use_fa enables flash
 // attention when a GPU backend is present; clamp_fp16 guards FP16
-// matmul accumulation on sub-Ampere CUDA. abi_version stays first so a
-// future struct growth keeps reading the version field at offset 0.
+// matmul accumulation on sub-Ampere CUDA. device names the GGML device
+// the handle runs on (CUDA0, Vulkan0, MTL0, CPU...), NULL selects the
+// best available one (since ABI 4). abi_version stays first so a future
+// struct growth keeps reading the version field at offset 0.
 struct ov_init_params {
     int          abi_version;
     const char * model_path;
     const char * codec_path;
     bool         use_fa;
     bool         clamp_fp16;
+    const char * device;
 };
 
 // Initialise to the standard defaults: codec_path NULL (caller must set
-// it for synthesis), use_fa true, clamp_fp16 false.
+// it for synthesis), use_fa true, clamp_fp16 false, device NULL.
 OV_API void ov_init_default_params(struct ov_init_params * p);
 
 // Allocate every module described by params. Returns NULL on any failure
