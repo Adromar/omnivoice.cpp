@@ -54,6 +54,9 @@ static void print_usage(const char * prog) {
             "  --host <ip>             Listen address (default: 127.0.0.1)\n"
             "  --port <n>              Listen port (default: 8080)\n"
             "  --lang <str>            Language label when a request omits one (default 'None')\n"
+            "  --chunk-duration <sec>  Long-form chunk duration (default: 15.0, <= 0 disables chunking)\n"
+            "  --chunk-threshold <sec> Activate chunking above this estimated duration (default: 30.0)\n"
+            "  --mg-steps <n>          MaskGIT denoising steps when a request omits \"num_steps\" (default: 32)\n"
             "  --no-fa                 Disable flash attention\n"
             "  --clamp-fp16            Clamp hidden states to FP16 range\n",
             prog);
@@ -74,6 +77,9 @@ int main(int argc, char ** argv) {
     server_config cfg;
     bool          use_fa     = true;
     bool          clamp_fp16 = false;
+    float         chunk_duration_sec  = 15.0f;
+    float         chunk_threshold_sec = 30.0f;
+    int           mg_steps            = 32;
 
     for (int i = 1; i < argc; i++) {
         const char * arg = argv[i];
@@ -89,6 +95,12 @@ int main(int argc, char ** argv) {
             cfg.port = std::atoi(argv[++i]);
         } else if (!std::strcmp(arg, "--lang") && i + 1 < argc) {
             lang = argv[++i];
+        } else if (!std::strcmp(arg, "--chunk-duration") && i + 1 < argc) {
+            chunk_duration_sec = std::strtof(argv[++i], NULL);
+        } else if (!std::strcmp(arg, "--chunk-threshold") && i + 1 < argc) {
+            chunk_threshold_sec = std::strtof(argv[++i], NULL);
+        } else if (!std::strcmp(arg, "--mg-steps") && i + 1 < argc) {
+            mg_steps = std::atoi(argv[++i]);
         } else if (!std::strcmp(arg, "--no-fa")) {
             use_fa = false;
         } else if (!std::strcmp(arg, "--clamp-fp16")) {
@@ -209,11 +221,17 @@ int main(int argc, char ** argv) {
     // granularity, the same path either way. A named voice injects its
     // pre-encoded reference ; an unknown name is rejected instead of
     // silently falling back to voice design.
-    be.synthesize = [ov, &lang](const tts_request & req, const tts_sink & sink, std::string & err) -> int {
+    be.synthesize = [ov, &lang, chunk_duration_sec, chunk_threshold_sec, mg_steps](const tts_request & req, const tts_sink & sink, std::string & err) -> int {
         struct ov_tts_params p;
         ov_tts_default_params(&p);
         p.text = req.input.c_str();
         p.lang = req.lang.empty() ? lang.c_str() : req.lang.c_str();
+        // Server-level chunking knobs (see main). With a threshold under the
+        // duration estimate, the long-form path splits the text on
+        // punctuation and streams each chunk as soon as it is synthesised,
+        // cutting time-to-first-byte on multi-sentence answers.
+        p.chunk_duration_sec  = chunk_duration_sec;
+        p.chunk_threshold_sec = chunk_threshold_sec;
 
         // Copy the registered codes out under the lock: the synthesis runs
         // for seconds, during which another connection may replace or
@@ -246,6 +264,15 @@ int main(int argc, char ** argv) {
         // fresh hardware random seed, anything else lands verbatim on
         // the MaskGIT sampler for reproducible output.
         p.mg_seed = (req.seed < 0) ? (uint64_t) std::random_device{}() : (uint64_t) req.seed;
+
+        // MaskGIT denoising steps: a per-request "num_steps" (range-checked
+        // at parse) wins over the startup --mg-steps default. Fewer steps
+        // trade articulation for nearly linear time.
+        if (req.num_steps > 0) {
+            p.mg_num_step = (int) req.num_steps;
+        } else if (mg_steps > 0) {
+            p.mg_num_step = mg_steps;
+        }
 
         // Trampoline : the C ABI on_chunk forwards to the C++ sink.
         const tts_sink * sink_ptr = &sink;

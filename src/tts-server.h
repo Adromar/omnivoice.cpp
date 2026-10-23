@@ -46,6 +46,10 @@ struct tts_request {
     // random seed per request, matching the CLI convention; anything
     // else forwards verbatim for reproducible output.
     int64_t seed;
+
+    // Optional MaskGIT denoising steps for this request. -1 (absent)
+    // keeps the server-side default (--mg-steps at startup).
+    int64_t num_steps;
 };
 
 // One voice registration parsed from the POST /v1/audio/voices JSON body.
@@ -174,10 +178,25 @@ static bool tts_parse_request(const std::string & body, tts_request & req, std::
     }
     req.seed = seed ? yyjson_get_sint(seed) : -1;
 
+    yyjson_val * num_steps = yyjson_obj_get(root, "num_steps");
+    if (num_steps && !yyjson_is_int(num_steps)) {
+        err = "'num_steps' must be an integer";
+        yyjson_doc_free(doc);
+        return false;
+    }
+    req.num_steps = num_steps ? yyjson_get_sint(num_steps) : -1;
+
     yyjson_doc_free(doc);
 
     if (req.format != "pcm" && req.format != "wav") {
         err = "response_format must be 'pcm' or 'wav'";
+        return false;
+    }
+    // Range-checked here, at parse time: the streaming path commits its
+    // 200 headers before synthesis runs, so an error raised from the
+    // synthesize adapter would surface as an empty 200 stream.
+    if (req.num_steps != -1 && (req.num_steps < 1 || req.num_steps > 256)) {
+        err = "'num_steps' out of range (1..256)";
         return false;
     }
     return true;
